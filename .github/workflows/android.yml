@@ -2,25 +2,79 @@ name: Android CI
 
 on:
   push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+    branches: [ master ]
+    tags: [ 'v*' ]
+    paths:
+      - 'doc-source/**'
+      - '.github/workflows/android.yml'
 
 jobs:
-  build:
-
+  docs-deploy:
+    name: Deploy Documentation
+    if: github.event_name == 'push' && !contains(github.ref, 'tags')
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+    
     steps:
-    - uses: actions/checkout@v4
-    - name: set up JDK 11
-      uses: actions/setup-java@v4
-      with:
-        java-version: '11'
-        distribution: 'temurin'
-        cache: gradle
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-    - name: Build with Gradle
-      run: ./gradlew build
+      - name: Setup JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Cache Gradle
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+
+      - name: Build Documentation
+        run: |
+          ./gradlew :dexkit-android:dokkaHtml
+          [ -d doc-source ] && cd doc-source && yarn install && yarn docs:build
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: |
+            build/dokka/html
+            doc-source/docs/.vuepress/dist
+          keep_files: true
+
+  kdoc-release:
+    name: Deploy KDoc to Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: docs-deploy
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build KDoc
+        run: ./gradlew :dexkit-android:dokkaJavadoc
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/dokka/javadoc/**
+            build/outputs/aar/*.aar
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
